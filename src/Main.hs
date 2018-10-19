@@ -2,6 +2,8 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Main
   ( main
@@ -12,6 +14,7 @@ module Main
   ) where
 
 import Control.Exception (throwIO)
+import Control.Monad.Reader
 import Data.Proxy (Proxy(..))
 import Network.Wai.Handler.Warp (run)
 import Servant
@@ -20,6 +23,11 @@ import Servant.Client
 import Servant.Client.Generic
 import Servant.Server.Generic
 import System.Environment (getArgs)
+
+data AppCustomState =
+  AppCustomState
+
+type AppM = ReaderT AppCustomState Handler
 
 data Routes route = Routes
   { _get :: route :- Capture "id" Int :> Get '[ JSON] String
@@ -44,11 +52,26 @@ cliRoutes =
 cliGet :: Int -> IO String
 cliGet = _get cliRoutes
 
-record :: Routes AsServer
-record = Routes {_get = return . show, _put = return . odd}
+getRoute :: Int -> AppM String
+getRoute = return . show
 
-app :: Application
-app = genericServe record
+putRoute :: Int -> AppM Bool
+putRoute = return . odd
+
+record :: Routes (AsServerT AppM)
+record = Routes {_get = getRoute, _put = putRoute}
+
+nt :: AppCustomState -> AppM a -> Handler a
+nt s x = runReaderT x s
+
+app :: AppCustomState -> Application
+app state =
+  serve
+    (Proxy :: Proxy (ToServantApi Routes))
+    (hoistServer
+       (Proxy :: Proxy (ToServantApi Routes))
+       (nt state)
+       (genericServerT record))
 
 main :: IO ()
 main = do
@@ -56,6 +79,6 @@ main = do
   case args of
     ("run":_) -> do
       putStrLn "Starting cookbook-generic at http://localhost:8000"
-      run 8000 app
+      run 8000 (app AppCustomState)
     _ ->
       putStrLn "To run, pass 'run' argument: cabal new-run cookbook-generic run"
